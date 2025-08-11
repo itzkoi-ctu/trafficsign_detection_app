@@ -15,8 +15,11 @@ android {
         versionName = "1.0"
     }
 
+
+
     buildTypes {
         release {
+
             isMinifyEnabled = false
             proguardFiles(
                 getDefaultProguardFile("proguard-android-optimize.txt"),
@@ -65,4 +68,10 @@ dependencies {
     testImplementation(libs.junit.junit)
     androidTestImplementation(libs.junit.junit)
     debugImplementation("androidx.compose.ui:ui-tooling")
+
+    implementation ("org.pytorch:pytorch_android:1.12.1")
+    implementation ("org.pytorch:pytorch_android_torchvision:1.12.1")
+
+    implementation ("org.tensorflow:tensorflow-lite-support:0.4.3") // hoặc version mới hơn
+
 }
