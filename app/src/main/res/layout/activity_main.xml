@@ -9,6 +9,12 @@
         android:layout_width="match_parent"
         android:layout_height="match_parent" />
 
+    <!-- Khung vẽ -->
+    <com.example.trafficsigndetection.draw.OverlayView
+        android:id="@+id/overlayView"
+        android:layout_width="match_parent"
+        android:layout_height="match_parent" />
+
     <!-- Kết quả nhận diện -->
     <TextView
         android:id="@+id/resultText"
@@ -20,6 +26,11 @@
         android:layout_gravity="top|center_horizontal"
         android:padding="16dp"
         android:background="#80000000"
-        android:elevation="10dp" />
-
+        android:elevation="10dp"
+        android:gravity="center"
+        android:scrollHorizontally="false"
+        android:singleLine="false"
+        android:ellipsize="none"
+        android:lines="4" />
 </FrameLayout>
+

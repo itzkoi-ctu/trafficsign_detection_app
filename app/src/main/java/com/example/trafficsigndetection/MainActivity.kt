@@ -19,25 +19,30 @@ import android.graphics.BitmapFactory
 import android.graphics.Color
 import android.graphics.ImageFormat
 import android.graphics.Rect
+import android.graphics.RectF
 import android.graphics.YuvImage
 import android.widget.TextView
 import com.example.trafficsigndetection.ClassifierPreprocessor
 import com.example.trafficsigndetection.TFLiteClassifier
 import com.example.trafficsigndetection.YoloPostProcessor
+import com.example.trafficsigndetection.draw.OverlayView
 import org.tensorflow.lite.Interpreter
 import java.io.ByteArrayOutputStream
 import java.util.Locale
 
 class MainActivity : AppCompatActivity(), TextToSpeech.OnInitListener {
     private lateinit var previewView: PreviewView
-    private lateinit var yoloInterpreter: TFLiteHelper
+    private lateinit var tfliteHelper: TFLiteHelper
     private lateinit var resultText: TextView
-    private lateinit var classifierInterpreter: TFLiteClassifier
+    private lateinit var overlayView: OverlayView
+    //private lateinit var classifierInterpreter: TFLiteClassifier
+    private lateinit var yoloInterpreter : TFLiteHelper
 
     //text to speech
     private lateinit var tts: TextToSpeech
     private var lastSpokenTime = 0L
     private var lastSpokenSign: String? = null
+    private val recentSigns = mutableListOf<String>()
 
 
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -46,9 +51,10 @@ class MainActivity : AppCompatActivity(), TextToSpeech.OnInitListener {
 
         previewView = findViewById(R.id.previewView)
         resultText= findViewById(R.id.resultText)
+        overlayView = findViewById(R.id.overlayView)
         yoloInterpreter = TFLiteHelper(this)
-        classifierInterpreter = TFLiteClassifier(this)
-//        tfliteHelper = TFLiteHelper(this)
+        //classifierInterpreter = TFLiteClassifier(this)
+        tfliteHelper = TFLiteHelper(this)
 
 
 
@@ -62,76 +68,94 @@ class MainActivity : AppCompatActivity(), TextToSpeech.OnInitListener {
         }
     }
 
-    private fun startCamera() {
+    fun startCamera() {
         val cameraProviderFuture = ProcessCameraProvider.getInstance(this)
-
         cameraProviderFuture.addListener({
             val cameraProvider = cameraProviderFuture.get()
 
             val preview = Preview.Builder()
                 .build()
                 .also {
-                    it.setSurfaceProvider(findViewById<PreviewView>(R.id.previewView).surfaceProvider)
+                    it.setSurfaceProvider(previewView.surfaceProvider)
                 }
 
             val imageAnalyzer = ImageAnalysis.Builder()
                 .setBackpressureStrategy(ImageAnalysis.STRATEGY_KEEP_ONLY_LATEST)
                 .build()
-                .also {
-                    it.setAnalyzer(Executors.newSingleThreadExecutor()) { imageProxy ->
-                        processImageProxy(imageProxy)
+
+            var lastAnalyzedTime = 0L
+
+            imageAnalyzer.setAnalyzer(Executors.newSingleThreadExecutor(), ImageAnalysis.Analyzer { imageProxy ->
+                val currentTime = System.currentTimeMillis()
+                if (currentTime - lastAnalyzedTime >= 1000) { // Process every second
+                    lastAnalyzedTime = currentTime
+
+                    val bitmap = imageProxyToBitmap(imageProxy)
+                    if (bitmap != null) {
+                        val input = ImageProcessor.preprocess(bitmap)
+                        val output = tfliteHelper.runInference(input) // [25200][47]
+
+                        val boxes = mutableListOf<RectF>()
+                        val labels = mutableListOf<String>()
+
+                        val modelInputSize = 640f // Matches preprocess targetSize
+                        val scale = minOf(
+                            modelInputSize / bitmap.width,
+                            modelInputSize / bitmap.height
+                        )
+                        val newWidth = (bitmap.width * scale).toInt()
+                        val newHeight = (bitmap.height * scale).toInt()
+                        val dx = (modelInputSize - newWidth) / 2f // Padding offset X
+                        val dy = (modelInputSize - newHeight) / 2f // Padding offset Y
+                        val scaleX = previewView.width / modelInputSize // Scale to preview width
+                        val scaleY = previewView.height / modelInputSize // Scale to preview height
+
+                        for (i in output.indices) {
+                            val row = output[i]
+                            val objConf = row[4]
+                            if (objConf < 0.1f) continue
+
+                            val classScores = row.copyOfRange(5, row.size)
+                            val maxClassScore = classScores.maxOrNull() ?: 0f
+                            val classIndex = classScores.indices.maxByOrNull { classScores[it] } ?: -1
+                            val finalScore = objConf * maxClassScore
+                            if (finalScore < 0.1f) continue
+
+                            // Scale normalized coords from 0-1 (model space) to 640x640, then to preview
+                            val cx = (row[0] * modelInputSize - dx) * scaleX
+                            val cy = (row[1] * modelInputSize - dy) * scaleY
+                            val w = row[2] * modelInputSize * scaleX
+                            val h = row[3] * modelInputSize * scaleY
+
+                            val left = cx - w / 2
+                            val top = cy - h / 2
+                            val right = cx + w / 2
+                            val bottom = cy + h / 2
+
+                            boxes.add(RectF(left, top, right, bottom))
+                            labels.add(CLASS_NAMES[classIndex] + " ${"%.0f".format(finalScore * 100)}%")
+                        }
+
+                        runOnUiThread {
+                            overlayView.setResults(boxes, labels) // Send to view for drawing
+                            if (labels.isNotEmpty()) {
+                                resultText.text = labels.joinToString("\n")
+                            } else {
+                                resultText.text = "Không nhận diện được rõ ràng"
+                            }
+                        }
                     }
                 }
+                imageProxy.close()
+            })
 
             val cameraSelector = CameraSelector.DEFAULT_BACK_CAMERA
-
-            try {
-                cameraProvider.unbindAll()
-                cameraProvider.bindToLifecycle(
-                    this, cameraSelector, preview, imageAnalyzer
-                )
-            } catch (exc: Exception) {
-                Log.e("CameraX", "Binding failed", exc)
-            }
-
+            cameraProvider.bindToLifecycle(this, cameraSelector, preview, imageAnalyzer)
         }, ContextCompat.getMainExecutor(this))
     }
 
-    private fun processImageProxy(imageProxy: ImageProxy) {
-        val bitmap = imageProxy.toBitmap()
-        val yoloInput = ImageProcessor.preprocess(bitmap)
-        val yoloOutput = yoloInterpreter.runInference(yoloInput)
-        val boxes = YoloPostProcessor.process(yoloOutput, bitmap.width, bitmap.height)
 
-        val resultBuilder = StringBuilder()
 
-        for (box in boxes) {
-            val cropped = Bitmap.createBitmap(
-                bitmap,
-                box.x1.coerceIn(0, bitmap.width - 1),
-                box.y1.coerceIn(0, bitmap.height - 1),
-                (box.x2 - box.x1).coerceAtLeast(1).coerceAtMost(bitmap.width - box.x1),
-                (box.y2 - box.y1).coerceAtLeast(1).coerceAtMost(bitmap.height - box.y1)
-            )
-
-            val resized = Bitmap.createScaledBitmap(cropped, 48, 48, true)
-            val classifierInput = ClassifierPreprocessor.preprocess(resized)
-
-            val pred = classifierInterpreter.runInference(classifierInput)
-            val classId = argmax(pred)
-            val label = CLASS_NAMES[classId]
-
-            resultBuilder.append("$label\n")
-        }
-
-        // Cập nhật UI trên main thread
-        runOnUiThread {
-            findViewById<TextView>(R.id.resultText).text =
-                if (resultBuilder.isNotEmpty()) resultBuilder.toString() else "Không nhận dạng được"
-        }
-
-        imageProxy.close()
-    }
 
 
     private fun argmax(array: FloatArray): Int {
