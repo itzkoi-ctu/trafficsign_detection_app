@@ -11,22 +11,21 @@ import androidx.camera.lifecycle.ProcessCameraProvider
 import androidx.camera.view.PreviewView
 import androidx.core.app.ActivityCompat
 import androidx.core.content.ContextCompat
-import com.example.trafficsigndetection.ImageProcessor
+
 import com.example.trafficsigndetection.TFLiteHelper
 import java.util.concurrent.Executors
 import android.graphics.Bitmap
 import android.graphics.BitmapFactory
+import android.graphics.Canvas
 import android.graphics.Color
 import android.graphics.ImageFormat
+import android.graphics.Matrix
 import android.graphics.Rect
 import android.graphics.RectF
 import android.graphics.YuvImage
 import android.widget.TextView
-import com.example.trafficsigndetection.ClassifierPreprocessor
-import com.example.trafficsigndetection.TFLiteClassifier
-import com.example.trafficsigndetection.YoloPostProcessor
 import com.example.trafficsigndetection.draw.OverlayView
-import org.tensorflow.lite.Interpreter
+import com.example.trafficsigndetection.utils.ImageProcessor
 import java.io.ByteArrayOutputStream
 import java.util.Locale
 
@@ -76,6 +75,7 @@ class MainActivity : AppCompatActivity(), TextToSpeech.OnInitListener {
             val preview = Preview.Builder()
                 .build()
                 .also {
+                    previewView.scaleType = PreviewView.ScaleType.FIT_CENTER
                     it.setSurfaceProvider(previewView.surfaceProvider)
                 }
 
@@ -87,67 +87,75 @@ class MainActivity : AppCompatActivity(), TextToSpeech.OnInitListener {
 
             imageAnalyzer.setAnalyzer(Executors.newSingleThreadExecutor(), ImageAnalysis.Analyzer { imageProxy ->
                 val currentTime = System.currentTimeMillis()
-                if (currentTime - lastAnalyzedTime >= 1000) { // Process every second
+                if (currentTime - lastAnalyzedTime >= 1000) {
                     lastAnalyzedTime = currentTime
 
-                    val bitmap = imageProxyToBitmap(imageProxy)
-                    if (bitmap != null) {
-                        val input = ImageProcessor.preprocess(bitmap)
-                        val output = tfliteHelper.runInference(input) // [25200][47]
+                    val rawBitmap = imageProxyToBitmap(imageProxy) ?: run {
+                        imageProxy.close(); return@Analyzer
+                    }
 
-                        val boxes = mutableListOf<RectF>()
-                        val labels = mutableListOf<String>()
+                    // Xoay bitmap đúng chiều preview
+                    val rotation = imageProxy.imageInfo.rotationDegrees
+                    val rotatedBitmap = rotateBitmap(rawBitmap, rotation)
 
-                        val modelInputSize = 640f // Matches preprocess targetSize
-                        val scale = minOf(
-                            modelInputSize / bitmap.width,
-                            modelInputSize / bitmap.height
-                        )
-                        val newWidth = (bitmap.width * scale).toInt()
-                        val newHeight = (bitmap.height * scale).toInt()
-                        val dx = (modelInputSize - newWidth) / 2f // Padding offset X
-                        val dy = (modelInputSize - newHeight) / 2f // Padding offset Y
-                        val scaleX = previewView.width / modelInputSize // Scale to preview width
-                        val scaleY = previewView.height / modelInputSize // Scale to preview height
+                    // Letterbox + lấy tham số scale/padding
+                    val (inputBitmap, lb) = letterbox(rotatedBitmap, 640)
+                    val inputBuffer = ImageProcessor.bitmapToFloatBuffer(inputBitmap)
 
-                        for (i in output.indices) {
-                            val row = output[i]
-                            val objConf = row[4]
-                            if (objConf < 0.1f) continue
+                    // Chạy model
+                    val outputBuffer = Array(1) { Array(25200) { FloatArray(47) } }
+                    tfliteHelper.getInterpreter().run(inputBuffer, outputBuffer)
 
-                            val classScores = row.copyOfRange(5, row.size)
-                            val maxClassScore = classScores.maxOrNull() ?: 0f
-                            val classIndex = classScores.indices.maxByOrNull { classScores[it] } ?: -1
-                            val finalScore = objConf * maxClassScore
-                            if (finalScore < 0.1f) continue
+                    // Parse kết quả -> chuyển về toạ độ của "rotatedBitmap"
+                    val boxes = mutableListOf<RectF>()
+                    val labels = mutableListOf<String>()
+                    val modelInputSize = lb.size.toFloat()
 
-                            // Scale normalized coords from 0-1 (model space) to 640x640, then to preview
-                            val cx = (row[0] * modelInputSize - dx) * scaleX
-                            val cy = (row[1] * modelInputSize - dy) * scaleY
-                            val w = row[2] * modelInputSize * scaleX
-                            val h = row[3] * modelInputSize * scaleY
+                    for (i in 0 until 25200) {
+                        val row = outputBuffer[0][i]
+                        val objConf = row[4]
+                        if (objConf < 0.1f) continue
 
-                            val left = cx - w / 2
-                            val top = cy - h / 2
-                            val right = cx + w / 2
-                            val bottom = cy + h / 2
+                        val classScores = row.copyOfRange(5, row.size)
+                        val maxClassScore = classScores.maxOrNull() ?: 0f
+                        val classIndex = classScores.indices.maxByOrNull { classScores[it] } ?: -1
+                        val finalScore = objConf * maxClassScore
+                        if (finalScore < 0.1f) continue
 
-                            boxes.add(RectF(left, top, right, bottom))
+                        // Toạ độ trong KHÔNG GIAN 640×640 (đÃ letterbox)
+                        val cx = row[0] * modelInputSize
+                        val cy = row[1] * modelInputSize
+                        val w  = row[2] * modelInputSize
+                        val h  = row[3] * modelInputSize
+
+                        // BỎ padding + CHIA scale -> về không gian của rotatedBitmap
+                        val x1 = ((cx - w/2f) - lb.dx) / lb.scale
+                        val y1 = ((cy - h/2f) - lb.dy) / lb.scale
+                        val x2 = ((cx + w/2f) - lb.dx) / lb.scale
+                        val y2 = ((cy + h/2f) - lb.dy) / lb.scale
+
+                        // Clamp vào ảnh xoay
+                        val l = x1.coerceIn(0f, rotatedBitmap.width  - 1f)
+                        val t = y1.coerceIn(0f, rotatedBitmap.height - 1f)
+                        val r = x2.coerceIn(0f, rotatedBitmap.width  - 1f)
+                        val b = y2.coerceIn(0f, rotatedBitmap.height - 1f)
+
+                        if (r > l && b > t) {
+                            boxes.add(RectF(l, t, r, b))
                             labels.add(CLASS_NAMES[classIndex] + " ${"%.0f".format(finalScore * 100)}%")
                         }
+                    }
 
-                        runOnUiThread {
-                            overlayView.setResults(boxes, labels) // Send to view for drawing
-                            if (labels.isNotEmpty()) {
-                                resultText.text = labels.joinToString("\n")
-                            } else {
-                                resultText.text = "Không nhận diện được rõ ràng"
-                            }
-                        }
+                    runOnUiThread {
+                        // Truyền kích thước của ảnh ĐÃ XOAY (không phải imageProxy.width/height)
+                        overlayView.setResults(boxes, labels, rotatedBitmap.width, rotatedBitmap.height)
+                        resultText.text = if (labels.isNotEmpty()) labels.joinToString("\n") else "Không nhận diện được"
                     }
                 }
                 imageProxy.close()
             })
+
+
 
             val cameraSelector = CameraSelector.DEFAULT_BACK_CAMERA
             cameraProvider.bindToLifecycle(this, cameraSelector, preview, imageAnalyzer)
@@ -172,26 +180,36 @@ class MainActivity : AppCompatActivity(), TextToSpeech.OnInitListener {
 
 
     // Chuyển ImageProxy sang Bitmap
-    private fun imageProxyToBitmap(imageProxy: ImageProxy): Bitmap? {
-        val yBuffer = imageProxy.planes[0].buffer
-        val uBuffer = imageProxy.planes[1].buffer
-        val vBuffer = imageProxy.planes[2].buffer
+    private fun imageProxyToBitmap(imageProxy: ImageProxy): Bitmap {
+        val yPlane = imageProxy.planes[0]
+        val uPlane = imageProxy.planes[1]
+        val vPlane = imageProxy.planes[2]
+
+        val yBuffer = yPlane.buffer
+        val uBuffer = uPlane.buffer
+        val vBuffer = vPlane.buffer
 
         val ySize = yBuffer.remaining()
         val uSize = uBuffer.remaining()
         val vSize = vBuffer.remaining()
 
+        // NV21: Y + VU (V trước, U sau)
         val nv21 = ByteArray(ySize + uSize + vSize)
         yBuffer.get(nv21, 0, ySize)
         vBuffer.get(nv21, ySize, vSize)
         uBuffer.get(nv21, ySize + vSize, uSize)
 
+        // Dùng RenderScript hoặc YuvImage để decode nhanh
         val yuvImage = YuvImage(nv21, ImageFormat.NV21, imageProxy.width, imageProxy.height, null)
         val out = ByteArrayOutputStream()
-        yuvImage.compressToJpeg(Rect(0, 0, imageProxy.width, imageProxy.height), 100, out)
+
+        // Giảm chất lượng xuống ~90 để tiết kiệm thời gian nhưng vẫn đẹp
+        yuvImage.compressToJpeg(Rect(0, 0, imageProxy.width, imageProxy.height), 90, out)
+
         val imageBytes = out.toByteArray()
         return BitmapFactory.decodeByteArray(imageBytes, 0, imageBytes.size)
     }
+
 
 
 
@@ -225,6 +243,32 @@ class MainActivity : AppCompatActivity(), TextToSpeech.OnInitListener {
         }
     }
 
+    data class LetterboxParams(val scale: Float, val dx: Float, val dy: Float, val size: Int)
+
+    private fun rotateBitmap(src: Bitmap, rotationDeg: Int): Bitmap {
+        if (rotationDeg % 360 == 0) return src
+        val m = Matrix()
+        m.postRotate(rotationDeg.toFloat())
+        return Bitmap.createBitmap(src, 0, 0, src.width, src.height, m, true)
+    }
+
+    private fun letterbox(src: Bitmap, size: Int = 640): Pair<Bitmap, LetterboxParams> {
+        val sw = src.width.toFloat()
+        val sh = src.height.toFloat()
+        val scale = minOf(size / sw, size / sh)
+        val nw = (sw * scale).toInt()
+        val nh = (sh * scale).toInt()
+
+        val resized = Bitmap.createScaledBitmap(src, nw, nh, true)
+        val out = Bitmap.createBitmap(size, size, Bitmap.Config.ARGB_8888)
+        val c = Canvas(out)
+        c.drawColor(Color.BLACK)
+        val dx = ((size - nw) / 2f)
+        val dy = ((size - nh) / 2f)
+        c.drawBitmap(resized, dx, dy, null)
+
+        return out to LetterboxParams(scale, dx, dy, size)
+    }
 
 
     companion object {
