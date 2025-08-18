@@ -60,6 +60,8 @@ dependencies {
     implementation("androidx.compose.ui:ui")
     implementation("androidx.compose.material3:material3")
     implementation("androidx.compose.ui:ui-tooling-preview")
+    implementation ("org.pytorch:pytorch_android_lite:1.13.1")      // hoặc pytorch_android (non-lite)
+    implementation ("org.pytorch:pytorch_android_torchvision:1.13.1")
     implementation(libs.androidx.monitor)
     implementation(libs.androidx.junit.ktx)
     testImplementation(libs.junit.junit)
