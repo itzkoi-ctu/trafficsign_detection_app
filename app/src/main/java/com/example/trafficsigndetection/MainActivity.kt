@@ -2,42 +2,79 @@ package com.example.trafficsignapp
 
 import android.Manifest
 import android.content.pm.PackageManager
+import android.graphics.Bitmap
+import android.graphics.Matrix
 import android.os.Bundle
-import android.util.Log
-import androidx.appcompat.app.AppCompatActivity
+import android.util.Size
+import android.widget.Toast
+import androidx.activity.ComponentActivity
+import androidx.activity.result.ActivityResultLauncher
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.camera.core.*
 import androidx.camera.lifecycle.ProcessCameraProvider
 import androidx.camera.view.PreviewView
-import androidx.core.app.ActivityCompat
 import androidx.core.content.ContextCompat
-import com.example.trafficsigndetection.ImageProcessor
-import com.example.trafficsigndetection.TFLiteHelper
+import com.example.trafficsignapp.databinding.ActivityMainBinding
+import com.example.trafficsigndetection.DetectionOverlay
+import com.example.trafficsigndetection.Tf1SsdDetector
+import java.nio.ByteBuffer
+import java.util.concurrent.ExecutorService
 import java.util.concurrent.Executors
-import android.graphics.Bitmap
-import android.graphics.BitmapFactory
-import android.graphics.ImageFormat
-import android.graphics.Rect
-import android.graphics.YuvImage
-import android.widget.TextView
-import java.io.ByteArrayOutputStream
+import java.util.concurrent.atomic.AtomicBoolean
 
-class MainActivity : AppCompatActivity() {
+class MainActivity : ComponentActivity() {
+
+    private lateinit var binding: ActivityMainBinding
     private lateinit var previewView: PreviewView
-    private lateinit var tfliteHelper: TFLiteHelper
-    private lateinit var resultText: TextView
+    private lateinit var overlay: DetectionOverlay
+
+    private var detector: Tf1SsdDetector? = null
+    private lateinit var cameraExecutor: ExecutorService
+    private lateinit var cameraPermissionLauncher: ActivityResultLauncher<String>
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
-        setContentView(R.layout.activity_main)
 
-        previewView = findViewById(R.id.previewView)
-        resultText= findViewById(R.id.resultText)
-        tfliteHelper = TFLiteHelper(this)
+        // ViewBinding
+        binding = ActivityMainBinding.inflate(layoutInflater)
+        setContentView(binding.root)
 
-        if (allPermissionsGranted()) {
+        // Views
+        previewView = binding.previewView
+        overlay = binding.overlay
+        previewView.implementationMode = PreviewView.ImplementationMode.PERFORMANCE
+        previewView.scaleType = PreviewView.ScaleType.FILL_CENTER
+
+        // Executor
+        cameraExecutor = Executors.newSingleThreadExecutor()
+
+        // Đăng ký launcher xin quyền camera
+        cameraPermissionLauncher =
+            registerForActivityResult(ActivityResultContracts.RequestPermission()) { granted ->
+                if (granted) startCamera()
+                else Toast.makeText(this, "Camera permission denied", Toast.LENGTH_LONG).show()
+            }
+
+        // Khởi tạo detector (bọc try/catch để không crash app nếu lỗi model/ABI)
+        try {
+            detector = Tf1SsdDetector(this)
+        } catch (e: Throwable) {
+            e.printStackTrace()
+            Toast.makeText(
+                this,
+                "Detector init failed: ${e.javaClass.simpleName}",
+                Toast.LENGTH_LONG
+            ).show()
+            detector = null
+        }
+
+        // Xin quyền hoặc mở camera
+        if (ContextCompat.checkSelfPermission(this, Manifest.permission.CAMERA)
+            == PackageManager.PERMISSION_GRANTED
+        ) {
             startCamera()
         } else {
-            ActivityCompat.requestPermissions(this, arrayOf(Manifest.permission.CAMERA), 1001)
+            cameraPermissionLauncher.launch(Manifest.permission.CAMERA)
         }
     }
 
@@ -45,92 +82,83 @@ class MainActivity : AppCompatActivity() {
         val cameraProviderFuture = ProcessCameraProvider.getInstance(this)
         cameraProviderFuture.addListener({
             val cameraProvider = cameraProviderFuture.get()
-            val preview = Preview.Builder().build().also {
-                it.setSurfaceProvider(previewView.surfaceProvider)
+
+            val preview = Preview.Builder()
+                .setTargetResolution(Size(1280, 720))
+                .build().also { it.setSurfaceProvider(previewView.surfaceProvider) }
+
+            val selector = CameraSelector.DEFAULT_BACK_CAMERA
+
+            // Chỉ thêm analyzer nếu detector đã init thành công
+            val useCases = mutableListOf<UseCase>(preview)
+            detector?.let { det ->
+                val analysis = ImageAnalysis.Builder()
+                    .setTargetResolution(Size(640, 480))
+                    .setOutputImageFormat(ImageAnalysis.OUTPUT_IMAGE_FORMAT_RGBA_8888)
+                    .setBackpressureStrategy(ImageAnalysis.STRATEGY_KEEP_ONLY_LATEST)
+                    .build().apply {
+                        setAnalyzer(cameraExecutor, RealtimeAnalyzer(det, overlay))
+                    }
+                useCases += analysis
             }
 
-            val imageAnalyzer = ImageAnalysis.Builder()
-                .setBackpressureStrategy(ImageAnalysis.STRATEGY_KEEP_ONLY_LATEST)
-                .build()
-
-             var lastAnalyzedTime = 0L
-
-            imageAnalyzer.setAnalyzer(Executors.newSingleThreadExecutor(), ImageAnalysis.Analyzer { imageProxy ->
-                val currentTime = System.currentTimeMillis()
-                if (currentTime - lastAnalyzedTime >= 1000) { // 500ms
-                    lastAnalyzedTime = currentTime
-
-                    val bitmap = imageProxyToBitmap(imageProxy)
-                    if (bitmap != null) {
-                        val input = ImageProcessor.preprocess(bitmap)
-                        val output = tfliteHelper.runInference(input)
-
-                        val classIndex = output.indices.maxByOrNull { output[it] } ?: -1
-                        val confidence = output[classIndex]
-
-                        runOnUiThread {
-                            if (confidence > 0.8f) {
-                                resultText.text = "Biển báo: $classIndex\nXác suất: ${"%.2f".format(confidence * 100)}%"
-                            } else {
-                                resultText.text = "Không nhận diện được rõ ràng"
-                            }
-                        }
-                    }
-                }
-                imageProxy.close()
-            })
-
-
-
-            val cameraSelector = CameraSelector.DEFAULT_BACK_CAMERA
-            cameraProvider.bindToLifecycle(this, cameraSelector, preview, imageAnalyzer)
+            cameraProvider.unbindAll()
+            cameraProvider.bindToLifecycle(this, selector, *useCases.toTypedArray())
         }, ContextCompat.getMainExecutor(this))
-    }
-
-    private fun allPermissionsGranted(): Boolean {
-        return ContextCompat.checkSelfPermission(this, Manifest.permission.CAMERA) == PackageManager.PERMISSION_GRANTED
     }
 
     override fun onDestroy() {
         super.onDestroy()
-        tfliteHelper.close()
+        cameraExecutor.shutdown()
+        detector?.close()
     }
-    override fun onRequestPermissionsResult(
-        requestCode: Int,
-        permissions: Array<out String>,
-        grantResults: IntArray
-    ) {
-        super.onRequestPermissionsResult(requestCode, permissions, grantResults)
-        if (requestCode == 1001 && grantResults.isNotEmpty() && grantResults[0] == PackageManager.PERMISSION_GRANTED) {
-            startCamera()
+}
+
+/** Analyzer: nhận frame, xoay đúng chiều, detect, vẽ lên overlay */
+private class RealtimeAnalyzer(
+    val detector: Tf1SsdDetector,
+    val overlay: DetectionOverlay
+) : ImageAnalysis.Analyzer {
+
+    private val busy = AtomicBoolean(false)
+    private var reuseBitmap: Bitmap? = null
+    private val matrix = Matrix()
+
+    override fun analyze(image: ImageProxy) {
+        if (!busy.compareAndSet(false, true)) { image.close(); return }
+
+        try {
+            val w = image.width
+            val h = image.height
+            val plane = image.planes[0] // RGBA
+            val buffer: ByteBuffer = plane.buffer
+            buffer.rewind()
+
+            var bmp = reuseBitmap
+            if (bmp == null || bmp.width != w || bmp.height != h) {
+                bmp = Bitmap.createBitmap(w, h, Bitmap.Config.ARGB_8888)
+                reuseBitmap = bmp
+            }
+            bmp!!.copyPixelsFromBuffer(buffer)
+
+            val rotation = image.imageInfo.rotationDegrees
+            val srcBitmap = if (rotation != 0) {
+                matrix.reset(); matrix.postRotate(rotation.toFloat())
+                Bitmap.createBitmap(bmp, 0, 0, bmp.width, bmp.height, matrix, false)
+            } else bmp
+
+            val dets = detector.detect(srcBitmap!!, minScore = 0.30f)
+
+            overlay.post {
+                overlay.setSourceInfo(srcBitmap.width, srcBitmap.height)
+                overlay.detections = dets
+                overlay.invalidate()
+            }
+        } catch (_: Exception) {
+            // log nếu cần
+        } finally {
+            image.close()
+            busy.set(false)
         }
     }
-    private fun imageProxyToBitmap(image: ImageProxy): Bitmap? {
-        val yBuffer = image.planes[0].buffer
-        val uBuffer = image.planes[1].buffer
-        val vBuffer = image.planes[2].buffer
-
-        val ySize = yBuffer.remaining()
-        val uSize = uBuffer.remaining()
-        val vSize = vBuffer.remaining()
-
-        val nv21 = ByteArray(ySize + uSize + vSize)
-
-        yBuffer.get(nv21, 0, ySize)
-        vBuffer.get(nv21, ySize, vSize)
-        uBuffer.get(nv21, ySize + vSize, uSize)
-
-        val yuvImage = YuvImage(
-            nv21,
-            ImageFormat.NV21,
-            image.width, image.height,
-            null
-        )
-        val out = ByteArrayOutputStream()
-        yuvImage.compressToJpeg(Rect(0, 0, image.width, image.height), 100, out)
-        val yuv = out.toByteArray()
-        return BitmapFactory.decodeByteArray(yuv, 0, yuv.size)
-    }
-
-
 }

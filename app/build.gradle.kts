@@ -6,7 +6,10 @@ plugins {
 android {
     namespace = "com.example.trafficsignapp"
     compileSdk = 34
-
+    buildFeatures { viewBinding = true }
+    androidResources {
+        noCompress += listOf("tflite", "pt", "bin", "pb", "mp3", "wav", "zip")
+    }
     defaultConfig {
         applicationId = "com.example.trafficsignapp"
         minSdk = 21
@@ -60,10 +63,18 @@ dependencies {
     implementation("androidx.compose.ui:ui")
     implementation("androidx.compose.material3:material3")
     implementation("androidx.compose.ui:ui-tooling-preview")
-    implementation ("org.pytorch:pytorch_android_lite:1.13.1")      // hoặc pytorch_android (non-lite)
-    implementation ("org.pytorch:pytorch_android_torchvision:1.13.1")
+//    implementation ("org.pytorch:pytorch_android_lite:1.13.1")      // hoặc pytorch_android (non-lite)
+//    implementation ("org.pytorch:pytorch_android_torchvision:1.13.1")
+//    implementation ("org.tensorflow:tensorflow-android:1.15.0")
+//    implementation ("org.tensorflow:tensorflow-android:1.15.0")
+    implementation("org.tensorflow:tensorflow-android:1.13.1")
+
+
+
     implementation(libs.androidx.monitor)
     implementation(libs.androidx.junit.ktx)
+    implementation(libs.androidx.room.external.antlr)
+    implementation(libs.androidx.constraintlayout)
     testImplementation(libs.junit.junit)
     androidTestImplementation(libs.junit.junit)
     debugImplementation("androidx.compose.ui:ui-tooling")
