@@ -1,0 +1,5 @@
+priority_road
+give_way
+stop
+no_entry
+unknown
