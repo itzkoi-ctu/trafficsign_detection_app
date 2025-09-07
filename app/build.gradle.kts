@@ -9,13 +9,14 @@ android {
 
     defaultConfig {
         applicationId = "com.example.trafficsignapp"
-        minSdk = 21
+        minSdk = 24
         targetSdk = 34
         versionCode = 1
         versionName = "1.0"
         // Nếu từng gặp lỗi thiếu .so, mở dòng sau:
-        // ndk { abiFilters += listOf("arm64-v8a", "armeabi-v7a") }
+         ndk { abiFilters += listOf("arm64-v8a", "armeabi-v7a") }
     }
+
 
     buildFeatures {
         viewBinding = true
@@ -63,6 +64,7 @@ dependencies {
     // AndroidX cơ bản
     implementation("androidx.core:core-ktx:1.12.0")
     implementation("androidx.appcompat:appcompat:1.6.1")
+    implementation("com.microsoft.onnxruntime:onnxruntime-android:latest.release")
 
     // Nếu DÙNG Compose UI thì mới thêm:
     // implementation(platform("androidx.compose:compose-bom:2023.10.01"))

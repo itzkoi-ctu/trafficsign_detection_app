@@ -127,7 +127,7 @@ class Tf1SsdDetector(context: Context) {
         val score: Float, val classId: Int, val label: String
     )
 
-    fun detect(src: Bitmap, minScore: Float = 0.2f, maxResults: Int = 20): List<Detection> {
+    fun detect(src: Bitmap, minScore: Float = 0.4f, maxResults: Int = 20): List<Detection> {
         // Resize về input của model
         val resized = Bitmap.createScaledBitmap(src, INPUT_W, INPUT_H, true)
         val input = bitmapToNHWCUint8Array(resized)

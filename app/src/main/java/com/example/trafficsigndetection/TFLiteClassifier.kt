@@ -14,10 +14,10 @@ class TFLiteClassifier(private val context: Context) {
     private val applySoftmax = true
 
     init {
-        spec = inspectTFLite(context, "traffic_sign_classifier_final.tflite")
+        spec = inspectTFLite(context, "traffic_sign_model.tflite")
 
         interpreter = Interpreter(
-            loadModelFile(context, "traffic_sign_classifier_final.tflite"),
+            loadModelFile(context, "traffic_sign_model.tflite"),
             Interpreter.Options().apply { setNumThreads(4) }
         )
 
@@ -84,9 +84,9 @@ class TFLiteClassifier(private val context: Context) {
                     val g = (p shr 8 and 0xFF)
                     val b = (p and 0xFF)
                     // CHỌN 1: [0,1]
-                    // buf.putFloat(r / 255f); buf.putFloat(g / 255f); buf.putFloat(b / 255f)
+                    buf.putFloat(r / 255f); buf.putFloat(g / 255f); buf.putFloat(b / 255f)
                     // CHỌN 2: [-1,1]  (bật cái nào đúng với training của bạn)
-                    buf.putFloat(r / 127.5f - 1f); buf.putFloat(g / 127.5f - 1f); buf.putFloat(b / 127.5f - 1f)
+//                    buf.putFloat(r / 127.5f - 1f); buf.putFloat(g / 127.5f - 1f); buf.putFloat(b / 127.5f - 1f)
                 }
                 buf.rewind(); buf
             }
