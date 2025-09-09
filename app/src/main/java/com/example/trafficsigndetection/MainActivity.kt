@@ -1,14 +1,14 @@
-
 package com.example.trafficsignapp
 
 import android.Manifest
 import android.content.pm.PackageManager
 import android.graphics.Bitmap
-import android.graphics.Matrix
 import android.os.Bundle
 import android.speech.tts.TextToSpeech
 import android.util.Log
 import android.util.Size
+import android.view.WindowManager
+import android.view.Surface
 import android.widget.Toast
 import androidx.activity.ComponentActivity
 import androidx.activity.result.ActivityResultLauncher
@@ -20,10 +20,11 @@ import androidx.core.content.ContextCompat
 import com.example.trafficsignapp.databinding.ActivityMainBinding
 import com.example.trafficsigndetection.*
 import java.nio.ByteBuffer
-import java.util.*
+import java.util.Locale
 import java.util.concurrent.ExecutorService
 import java.util.concurrent.Executors
 import java.util.concurrent.atomic.AtomicBoolean
+import java.util.concurrent.atomic.AtomicLong
 
 class MainActivity : ComponentActivity() {
 
@@ -32,23 +33,28 @@ class MainActivity : ComponentActivity() {
     private lateinit var overlay: DetectionOverlay
 
     private var detector: Tf1SsdDetector? = null
-    private lateinit var onnxCls: OnnxClassifier
+    private var classifier: TFLiteClassifier? = null
 
     private lateinit var cameraExecutor: ExecutorService
     private lateinit var cameraPermissionLauncher: ActivityResultLauncher<String>
     private lateinit var tts: TextToSpeech
-    private lateinit var labelTranslator: LabelTranslator
+    lateinit var labelTranslator: LabelTranslator
+
     private var lastSpokenLabel: String = ""
+    private var lastSpokenAt: Long = 0L
+    private val speakCooldownMs = 1200L
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         binding = ActivityMainBinding.inflate(layoutInflater)
         setContentView(binding.root)
 
+        window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
+
         previewView = binding.previewView
         overlay = binding.overlay
         previewView.implementationMode = PreviewView.ImplementationMode.PERFORMANCE
-        previewView.scaleType = PreviewView.ScaleType.FILL_CENTER
+        previewView.scaleType = PreviewView.ScaleType.FILL_CENTER // phủ kín màn ngang
 
         cameraExecutor = Executors.newSingleThreadExecutor()
         labelTranslator = LabelTranslator(this)
@@ -59,9 +65,7 @@ class MainActivity : ComponentActivity() {
                 if (result == TextToSpeech.LANG_MISSING_DATA || result == TextToSpeech.LANG_NOT_SUPPORTED) {
                     Log.e("TTS", "Ngôn ngữ không được hỗ trợ")
                 }
-            } else {
-                Log.e("TTS", "Khởi tạo TTS thất bại")
-            }
+            } else Log.e("TTS", "Khởi tạo TTS thất bại")
         }
 
         cameraPermissionLauncher =
@@ -72,25 +76,26 @@ class MainActivity : ComponentActivity() {
 
         try {
             detector = Tf1SsdDetector(this)
-            onnxCls = OnnxClassifier(this, "traffic_sign_classifier.onnx", "class.txt", OnnxClassifier.Normalize.ZERO_TO_ONE)
+            classifier = TFLiteClassifier(this)
         } catch (e: Throwable) {
             e.printStackTrace()
             Toast.makeText(this, "Init failed: ${e.javaClass.simpleName}", Toast.LENGTH_LONG).show()
             return
         }
 
-        if (ContextCompat.checkSelfPermission(this, Manifest.permission.CAMERA) == PackageManager.PERMISSION_GRANTED) {
-            startCamera()
-        } else {
-            cameraPermissionLauncher.launch(Manifest.permission.CAMERA)
-        }
+        if (ContextCompat.checkSelfPermission(this, Manifest.permission.CAMERA)
+            == PackageManager.PERMISSION_GRANTED
+        ) startCamera()
+        else cameraPermissionLauncher.launch(Manifest.permission.CAMERA)
     }
 
-    fun speakTranslated(label: String) {
-        val translated = labelTranslator.translate(label)
-        if (translated != lastSpokenLabel) {
+    fun speakTranslated(rawLabel: String) {
+        val translated = labelTranslator.translate(rawLabel)
+        val now = System.currentTimeMillis()
+        if (translated != lastSpokenLabel || now - lastSpokenAt >= speakCooldownMs) {
             tts.speak(translated, TextToSpeech.QUEUE_FLUSH, null, null)
             lastSpokenLabel = translated
+            lastSpokenAt = now
         }
     }
 
@@ -100,50 +105,64 @@ class MainActivity : ComponentActivity() {
             val cameraProvider = cameraProviderFuture.get()
             if (isDestroyed || isFinishing) return@addListener
 
-            val preview = Preview.Builder()
-                .setTargetResolution(Size(1280, 720))
-                .build().also { it.setSurfaceProvider(previewView.surfaceProvider) }
-
             val selector = CameraSelector.DEFAULT_BACK_CAMERA
-            val useCases = mutableListOf<UseCase>(preview)
 
-            detector?.let { det ->
-                val analysis = ImageAnalysis.Builder()
-                    .setTargetResolution(Size(640, 480))
-                    .setOutputImageFormat(ImageAnalysis.OUTPUT_IMAGE_FORMAT_RGBA_8888)
-                    .setBackpressureStrategy(ImageAnalysis.STRATEGY_KEEP_ONLY_LATEST)
-                    .build().apply {
-                        setAnalyzer(cameraExecutor, RealtimeAnalyzer(det, overlay, onnxCls))
-                    }
-                useCases += analysis
-            }
+            // Ép xoay phù hợp LDPlayer/ màn hình ngang. Nếu ngược thì đổi ROTATION_270.
+            val forcedRotation = Surface.ROTATION_90
 
-            try {
-                cameraProvider.unbindAll()
-                cameraProvider.bindToLifecycle(this, selector, *useCases.toTypedArray())
-            } catch (e: Exception) {
-                Log.e("Camera", "bindToLifecycle failed", e)
-            }
+            val preview = Preview.Builder()
+                .setTargetAspectRatio(AspectRatio.RATIO_16_9)
+                .setTargetRotation(forcedRotation)
+                .build()
+                .also { it.setSurfaceProvider(previewView.surfaceProvider) }
+
+            val analysis = ImageAnalysis.Builder()
+                .setTargetAspectRatio(AspectRatio.RATIO_16_9)
+                .setTargetRotation(forcedRotation)
+                .setOutputImageFormat(ImageAnalysis.OUTPUT_IMAGE_FORMAT_RGBA_8888)
+                .setBackpressureStrategy(ImageAnalysis.STRATEGY_KEEP_ONLY_LATEST)
+                .build()
+                .apply {
+                    setAnalyzer(
+                        cameraExecutor,
+                        RealtimeAnalyzer(detector!!, overlay, classifier)
+                    )
+                }
+
+            cameraProvider.unbindAll()
+            cameraProvider.bindToLifecycle(this, selector, preview, analysis)
         }, ContextCompat.getMainExecutor(this))
     }
 
     private class RealtimeAnalyzer(
         val detector: Tf1SsdDetector,
         val overlay: DetectionOverlay,
-        val classifier: OnnxClassifier? = null
+        val classifier: TFLiteClassifier? = null
     ) : ImageAnalysis.Analyzer {
 
         private val busy = AtomicBoolean(false)
+        private val clsBusy = AtomicBoolean(false)
+        private val latestTicket = AtomicLong(0)
+
         private var reuseBitmap: Bitmap? = null
-        private val matrix = Matrix()
         private val clsExecutor = Executors.newSingleThreadExecutor()
         private var lastClsAt = 0L
-        private val minClsIntervalMs = 300L
+        private val minClsIntervalMs = 100L
+
+        // Debounce/anti-repeat
         private var lastLabel = ""
         private var stableCount = 0
-        private val debounceThreshold = 2
+        private val minStableFramesToSpeak = 2
+
+        // Chống đọc lặp: chỉ đọc khi nhãn mới; mở khóa sau khi nhãn đó biến mất đủ lâu
+        private var spokenLabel: String? = null
+        private var lastSeenLabel: String? = null
+        private var lastSeenAt = 0L
+        private val rearmMs = 1500L   // không thấy cùng nhãn trong ~1.5s thì cho phép đọc lại
+
+        // thời gian để hiển thị overlay text dù không đọc
         private var lastStableLabelTime = 0L
-        private val displayDuration = 1000L
+        private val displayDuration = 500L
 
         override fun analyze(image: ImageProxy) {
             if (!busy.compareAndSet(false, true)) {
@@ -162,13 +181,9 @@ class MainActivity : ComponentActivity() {
                 }
                 bmp!!.copyPixelsFromBuffer(buffer)
 
-                val rotation = image.imageInfo.rotationDegrees
-                val srcBitmap = if (rotation != 0) {
-                    matrix.reset(); matrix.postRotate(rotation.toFloat())
-                    Bitmap.createBitmap(bmp, 0, 0, bmp.width, bmp.height, matrix, false)
-                } else bmp
+                val srcBitmap = bmp // đã đúng chiều nhờ targetRotation
 
-                val dets = detector.detect(srcBitmap!!, minScore = 0.18f)
+                val dets = detector.detect(srcBitmap, minScore = 0.3f)
                 val now = System.currentTimeMillis()
                 val top = dets.maxByOrNull { it.score }
 
@@ -179,54 +194,87 @@ class MainActivity : ComponentActivity() {
                     overlay.invalidate()
                 }
 
+                // Nếu lâu không thấy nhãn được “khóa”, bỏ khóa để lần sau đọc lại
+                if (spokenLabel != null && now - lastSeenAt > rearmMs) {
+                    spokenLabel = null
+                }
+
                 if (classifier != null && top != null && now - lastClsAt >= minClsIntervalMs) {
                     lastClsAt = now
+
                     val idx = dets.indexOf(top)
                     val boxW = (top.xmax - top.xmin) * srcBitmap.width
                     val boxH = (top.ymax - top.ymin) * srcBitmap.height
 
-                    if ((boxW >= 32 && boxH >= 32 || top.score >= 0.6f) && idx >= 0){
+                    val enoughSize = (boxW >= 24 && boxH >= 24) || top.score >= 0.4f
+                    if (enoughSize && idx >= 0) {
                         val crop = safeCropFromDetection(srcBitmap, top, padRatio = 0.12f)
                         val resized = centerCropResize(crop, 224)
 
+                        if (!clsBusy.compareAndSet(false, true)) {
+                            image.close(); busy.set(false); return
+                        }
+
+                        val ticket = latestTicket.incrementAndGet()
+
                         clsExecutor.execute {
-                            val result = classifier.classify(resized)
-                            val newLabel = "${result.label} ${(result.prob * 100).toInt()}%"
+                            try {
+                                val result = classifier.classify(resized)
+                                if (ticket != latestTicket.get()) return@execute
 
-                            val activity = overlay.context as? MainActivity
-                            activity?.runOnUiThread {
-                                activity.binding.imageDebug.setImageBitmap(crop)
-                            }
+                                val activity = overlay.context as? MainActivity
+                                val newLabel = result.label
+                                val newLabelText = "$newLabel ${(result.prob * 100).toInt()}%"
 
-                            val labelChanged = result.label != lastLabel
-                            if (labelChanged) {
-                                stableCount = 1
-                                lastLabel = result.label
-                            } else {
-                                stableCount++
-                            }
-
-                            val shouldUpdate = labelChanged || stableCount >= debounceThreshold || now - lastStableLabelTime >= displayDuration
-                            if (shouldUpdate) {
-                                lastStableLabelTime = now
+                                // cập nhật "đang thấy nhãn nào" và "thời điểm cuối thấy"
+                                lastSeenLabel = newLabel
+                                lastSeenAt = System.currentTimeMillis()
 
                                 activity?.runOnUiThread {
-                                    val translated = activity.labelTranslator.translate(result.label)
-                                    activity.speakTranslated(translated)
+                                    if (ticket != latestTicket.get()) return@runOnUiThread
+                                    activity.binding.imageDebug.setImageBitmap(crop)
 
+                                    // ổn định nhãn theo frame
+                                    val labelChangedFromPrev = newLabel != lastLabel
+                                    if (labelChangedFromPrev) {
+                                        stableCount = 1
+                                        lastLabel = newLabel
+                                    } else {
+                                        stableCount++
+                                    }
+
+                                    val stableNow = stableCount >= minStableFramesToSpeak
+
+                                    // ---- QUAN TRỌNG: logic chống đọc lặp ----
+                                    val canSpeak =
+                                        stableNow &&
+                                                (spokenLabel == null || spokenLabel != newLabel)
+
+                                    if (canSpeak) {
+                                        activity.speakTranslated(newLabel) // nói một lần
+                                        spokenLabel = newLabel             // khóa lại
+                                    }
+                                    // ----------------------------------------
+
+                                    // Cập nhật nhãn hiển thị
                                     val list = overlay.extraLabels.toMutableList().let {
                                         while (it.size < dets.size) it += ""
                                         it
                                     }
-                                    if (idx in list.indices) list[idx] = newLabel
+                                    if (idx in list.indices) list[idx] = newLabelText
                                     overlay.extraLabels = list
                                     overlay.invalidate()
+
+                                    lastStableLabelTime = System.currentTimeMillis()
                                 }
+                            } catch (e: Throwable) {
+                                Log.e("RealtimeAnalyzer", "cls error", e)
+                            } finally {
+                                clsBusy.set(false)
                             }
                         }
                     }
                 }
-
             } catch (e: Exception) {
                 Log.e("RealtimeAnalyzer", "Error in analyze", e)
             } finally {
@@ -235,8 +283,11 @@ class MainActivity : ComponentActivity() {
             }
         }
 
-
-        private fun safeCropFromDetection(frame: Bitmap, det: Tf1SsdDetector.Detection, padRatio: Float): Bitmap {
+        private fun safeCropFromDetection(
+            frame: Bitmap,
+            det: Tf1SsdDetector.Detection,
+            padRatio: Float
+        ): Bitmap {
             val w = frame.width.toFloat()
             val h = frame.height.toFloat()
             fun nx(v: Float) = if (det.xmax <= 1f && det.xmin <= 1f) v * w else v
@@ -259,9 +310,8 @@ class MainActivity : ComponentActivity() {
         super.onDestroy()
         cameraExecutor.shutdown()
         detector?.close()
+        try { classifier?.close() } catch (_: Throwable) {}
         tts.stop()
         tts.shutdown()
-        try { onnxCls.close() } catch (_: Throwable) {}
     }
 }
-
