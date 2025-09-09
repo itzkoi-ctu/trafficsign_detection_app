@@ -117,8 +117,12 @@ Mở dự án bằng Android Studio, sync Gradle và build.
 
 ## 👨‍💻 Tác giả
 
-- Nguyễn Long (CTU – Kỹ thuật phần mềm)  
-- Liên hệ: [email@example.com](mailto:email@example.com)
+- Quang Long 
+- Gia Đại
+- Trần Lực
+- Gia Bảo
+Kỹ thuật phần mềm CLC - K48
+- Liên hệ: [longnguyen0397042@gmail.com](mailto:longnguyen0397042@gmail.com)
 
 ---
 
