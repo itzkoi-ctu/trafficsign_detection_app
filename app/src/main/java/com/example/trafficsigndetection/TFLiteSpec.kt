@@ -58,5 +58,3 @@ fun inspectTFLite(ctx: Context, assetName: String): TFLiteSpec {
         numClasses = numClasses
     )
 }
-
-

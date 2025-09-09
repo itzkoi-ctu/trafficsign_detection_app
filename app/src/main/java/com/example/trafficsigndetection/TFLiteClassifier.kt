@@ -5,6 +5,8 @@ import android.graphics.Bitmap
 import org.tensorflow.lite.Interpreter
 import java.nio.ByteBuffer
 import java.nio.ByteOrder
+data class ClassificationResult(val label: String, val prob: Float)
+
 class TFLiteClassifier(private val context: Context) {
     private val interpreter: Interpreter
     private val spec: TFLiteSpec
@@ -14,10 +16,10 @@ class TFLiteClassifier(private val context: Context) {
     private val applySoftmax = true
 
     init {
-        spec = inspectTFLite(context, "traffic_sign_model.tflite")
+        spec = inspectTFLite(context, "traffic_sign_classifier_final.tflite")
 
         interpreter = Interpreter(
-            loadModelFile(context, "traffic_sign_model.tflite"),
+            loadModelFile(context, "traffic_sign_classifier_final.tflite"),
             Interpreter.Options().apply { setNumThreads(4) }
         )
 
@@ -40,7 +42,7 @@ class TFLiteClassifier(private val context: Context) {
     }
 
 
-    fun classify(cropped: Bitmap): Pair<String, FloatArray> {
+    fun classify(cropped: Bitmap): ClassificationResult {
         val inputImg = centerCropResize(cropped, inputSize)
         val input = makeInputBuffer(inputImg)
         val out: Any = when (spec.outputDtype) {
@@ -69,7 +71,8 @@ class TFLiteClassifier(private val context: Context) {
 
         val top = probs.indices.maxByOrNull { probs[it] } ?: 0
         val label = labels.getOrElse(top) { "class_$top" }
-        return label to probs
+        val prob = probs[top]
+        return ClassificationResult(label, prob)
     }
 
     private fun makeInputBuffer(bm: Bitmap): ByteBuffer {
