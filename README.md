@@ -1,3 +1,13 @@
+
+<h3 align="center" font-size= 14px;><b>Trường Công nghệ thông tin và Truyền thông - ĐH Cần Thơ</b></h3>
+<p align="center">
+  <a href="https://www.cit.ctu.edu.vn/" title="Trường Công nghệ thông tin và Truyền thông" style="border: 5;">
+    <img src="https://www.cit.ctu.edu.vn/images/Banner-Logo/Banner_06-8-2025.jpg" alt="Trường Công nghệ thông tin và Truyền thông | Collage of Information Technology and Communication">
+  </a>
+</p>
+
+
+
 # 🚦 Traffic Sign Detection App
 
 Ứng dụng Android phát hiện & nhận diện **biển báo giao thông** theo thời gian thực, tích hợp **CameraX** và **TensorFlow Lite**.  

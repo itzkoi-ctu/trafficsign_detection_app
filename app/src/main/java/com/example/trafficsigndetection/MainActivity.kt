@@ -183,7 +183,7 @@ class MainActivity : ComponentActivity() {
 
                 val srcBitmap = bmp // đã đúng chiều nhờ targetRotation
 
-                val dets = detector.detect(srcBitmap, minScore = 0.3f)
+                val dets = detector.detect(srcBitmap, minScore = 0.15f)
                 val now = System.currentTimeMillis()
                 val top = dets.maxByOrNull { it.score }
 

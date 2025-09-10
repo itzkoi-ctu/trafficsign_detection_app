@@ -16,10 +16,10 @@ class TFLiteClassifier(private val context: Context) {
     private val applySoftmax = true
 
     init {
-        spec = inspectTFLite(context, "traffic_sign_classifier_final.tflite")
+        spec = inspectTFLite(context, "traffic_sign_classifier_final2.tflite")
 
         interpreter = Interpreter(
-            loadModelFile(context, "traffic_sign_classifier_final.tflite"),
+            loadModelFile(context, "traffic_sign_classifier_final2.tflite"),
             Interpreter.Options().apply { setNumThreads(4) }
         )
 
