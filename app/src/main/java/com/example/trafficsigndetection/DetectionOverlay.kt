@@ -1,4 +1,3 @@
-
 package com.example.trafficsigndetection
 
 import android.content.Context
@@ -57,9 +56,9 @@ class DetectionOverlay @JvmOverloads constructor(
 
             val cls = extraLabels.getOrNull(i)
             val text = if (!cls.isNullOrBlank())
-                "${d.label} ${(d.score * 100).toInt()}% • $cls"
+                cls
             else
-                "${d.label} ${(d.score * 100).toInt()}%"
+                ""
 
             val bounds = Rect()
             textPaint.getTextBounds(text, 0, text.length, bounds)
@@ -67,12 +66,18 @@ class DetectionOverlay @JvmOverloads constructor(
             val tx = l
             val ty = max(t - 8f, 24f)
 
-            canvas.drawRect(tx - pad, ty - bounds.height() - pad, tx + bounds.width() + pad, ty + pad, bgPaint)
+            canvas.drawRect(
+                tx - pad,
+                ty - bounds.height() - pad,
+                tx + bounds.width() + pad,
+                ty + pad,
+                bgPaint
+            )
             canvas.drawText(text, tx, ty, textPaint)
 
             Log.d("DET", text)
 
-            Log.d("DET", "${d.label} ${(d.score*100).toInt()}% [$l,$t,$r,$b]")
+            Log.d("DET", "${d.label} ${(d.score * 100).toInt()}% [$l,$t,$r,$b]")
         }
         Log.d("DET", "count=${detections.size}")
     }

@@ -16,7 +16,7 @@ class Tf1SsdDetector(context: Context) {
     private val INPUT_H = 300
 
     init {
-        tf = TensorFlowInferenceInterface(context.assets, "frozen_inference_graph.pb")
+        tf = TensorFlowInferenceInterface(context.assets, "traffic_sign_detector_model.pb")
         labels = context.assets.open("labels.txt").bufferedReader(Charsets.UTF_8).readLines()
     }
 

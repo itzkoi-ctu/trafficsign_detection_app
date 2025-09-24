@@ -1,11 +1,8 @@
 package com.example.trafficsigndetection
 
 import android.content.Context
-import android.graphics.Bitmap
 import org.tensorflow.lite.Interpreter
 import java.io.FileInputStream
-import java.nio.ByteBuffer
-import java.nio.ByteOrder
 import java.nio.MappedByteBuffer
 import java.nio.channels.FileChannel
 

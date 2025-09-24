@@ -75,7 +75,9 @@ fun softmax(x: FloatArray): FloatArray {
     val m = x.maxOrNull() ?: 0f
     var s = 0f
     val e = FloatArray(x.size)
-    for (i in x.indices) { e[i] = kotlin.math.exp((x[i] - m).toDouble()).toFloat(); s += e[i] }
+    for (i in x.indices) {
+        e[i] = kotlin.math.exp((x[i] - m).toDouble()).toFloat(); s += e[i]
+    }
     for (i in x.indices) e[i] /= s
     return e
 }
