@@ -3,11 +3,7 @@ package com.example.trafficsignapp
 import android.Manifest
 import android.content.pm.PackageManager
 import android.graphics.Bitmap
-import android.graphics.Canvas
-import android.graphics.Color
-import android.graphics.ColorMatrix
-import android.graphics.ColorMatrixColorFilter
-import android.graphics.Paint
+
 import android.os.Bundle
 import android.speech.tts.TextToSpeech
 import android.util.Log
@@ -29,9 +25,14 @@ import java.util.concurrent.ExecutorService
 import java.util.concurrent.Executors
 import java.util.concurrent.atomic.AtomicBoolean
 import java.util.concurrent.atomic.AtomicLong
-import kotlin.math.max
 
 class MainActivity : ComponentActivity() {
+
+
+    //Test HASHSET
+    private val spokenSet = mutableSetOf<String>()
+    private var lastReset = System.currentTimeMillis()
+    private val resetIntervalMs = 4000L
 
     private lateinit var binding: ActivityMainBinding
     private lateinit var previewView: PreviewView
@@ -94,16 +95,22 @@ class MainActivity : ComponentActivity() {
         else cameraPermissionLauncher.launch(Manifest.permission.CAMERA)
     }
 
-    fun speakTranslated(rawLabel: String) {
-        val translated = labelTranslator.translate(rawLabel)
-        val now = System.currentTimeMillis()
-        if (translated != lastSpokenLabel || now - lastSpokenAt >= speakCooldownMs) {
-            tts.speak(translated, TextToSpeech.QUEUE_FLUSH, null, null)
-            lastSpokenLabel = translated
-            lastSpokenAt = now
-        }
+
+fun speakTranslated(rawLabel: String) {
+    val translated = labelTranslator.translate(rawLabel)
+
+    val now = System.currentTimeMillis()
+    if (now - lastReset > resetIntervalMs) {
+        spokenSet.clear()
+        lastReset = now
     }
 
+    // Nếu đã đọc rồi thì bỏ qua
+    if (spokenSet.contains(translated)) return
+
+    spokenSet.add(translated)
+    tts.speak(translated, TextToSpeech.QUEUE_ADD, null, translated)
+}
     private fun startCamera() {
         val cameraProviderFuture = ProcessCameraProvider.getInstance(this)
         cameraProviderFuture.addListener({
@@ -267,11 +274,6 @@ class MainActivity : ComponentActivity() {
 
 
 
-
-
-
-
-
                                 if (ticket != latestTicket.get()) return@execute
 
 
@@ -307,9 +309,18 @@ class MainActivity : ComponentActivity() {
                                     val canSpeak =
                                         stableNow && (spokenLabel == null || spokenLabel != newLabel)
                                     if (canSpeak) {
-                                        activity.speakTranslated(newLabel) // đọc tiếng Việt
-                                        spokenLabel = newLabel
+                                        val labelToSpeak = newLabel
+                                        val activity = overlay.context as? MainActivity
+                                        activity?.runOnUiThread {
+                                            activity.binding.root.postDelayed({
+                                                if (spokenLabel == null || spokenLabel != labelToSpeak) {
+                                                    activity.speakTranslated(labelToSpeak)
+                                                    spokenLabel = labelToSpeak
+                                                }
+                                            }, 1000) // 5000ms = 5 giây
+                                        }
                                     }
+
 
                                     // ---- cập nhật nhãn hiển thị (bằng tiếng Việt) ----
                                     val list = overlay.extraLabels.toMutableList().let {
@@ -365,31 +376,7 @@ class MainActivity : ComponentActivity() {
             return Bitmap.createBitmap(frame, x, y, cw, ch)
         }
 
-        private fun prepareDigitInput(crop: Bitmap): Bitmap {
-            // 1. Ép vuông: chọn cạnh dài nhất
-            val side = max(crop.width, crop.height)
-            val square = Bitmap.createBitmap(side, side, Bitmap.Config.ARGB_8888)
-            val canvas = Canvas(square)
-            val dx = (side - crop.width) / 2f
-            val dy = (side - crop.height) / 2f
-            canvas.drawColor(Color.WHITE) // nền trắng
-            canvas.drawBitmap(crop, dx, dy, null)
 
-            // 2. Resize về 32x32
-            val resized = Bitmap.createScaledBitmap(square, 32, 32, true)
-
-            // 3. Convert sang grayscale (nếu cần)
-            val gray = Bitmap.createBitmap(32, 32, Bitmap.Config.ARGB_8888)
-            val c = Canvas(gray)
-            val paint = Paint()
-            val matrix = ColorMatrix()
-            matrix.setSaturation(0f) // biến thành ảnh xám
-            val filter = ColorMatrixColorFilter(matrix)
-            paint.colorFilter = filter
-            c.drawBitmap(resized, 0f, 0f, paint)
-
-            return gray
-        }
 
     }
 
